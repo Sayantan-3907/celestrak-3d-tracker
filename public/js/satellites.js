@@ -34,7 +34,7 @@ export class SatelliteManager {
     // ---------------------------------------------------------------------------
 
     // Silently probe /api/metadata — never surface its failure as a toast.
-    fetch('/api/metadata').catch(() => {});
+    fetch('/api/metadata').catch(() => { });
 
     let groupsRes, satsRes;
     try {
@@ -65,11 +65,11 @@ export class SatelliteManager {
     }
 
     const groupsJson = groupsRes.ok ? await groupsRes.json() : { groups: [] };
-    const satsJson   = await satsRes.json();
+    const satsJson = await satsRes.json();
 
     this.groupsMeta = groupsJson.groups ?? [];
-    this.fetchedAt  = satsJson.fetchedAt || Date.now();
-    this.stale      = Boolean(satsJson.stale);
+    this.fetchedAt = satsJson.fetchedAt || Date.now();
+    this.stale = Boolean(satsJson.stale);
 
     if (satsJson.errors && Object.keys(satsJson.errors).length > 0) {
       console.warn('[orbital] Some satellite groups failed to load:', satsJson.errors);
@@ -83,9 +83,9 @@ export class SatelliteManager {
 
     return {
       totalCount: this.records.size,
-      groups:     this.groupsMeta,
-      stale:      this.stale,
-      errors:     satsJson.errors || null,
+      groups: this.groupsMeta,
+      stale: this.stale,
+      errors: satsJson.errors || null,
     };
   }
 
@@ -112,17 +112,17 @@ export class SatelliteManager {
     ];
 
     this.groupsMeta = [{ key: 'stations', label: 'Space Stations', color: '#4FD1C5' }];
-    this.fetchedAt  = Date.now();
-    this.stale      = true;
+    this.fetchedAt = Date.now();
+    this.stale = true;
 
     this._ingestSatelliteGroups({ stations: FALLBACK });
 
     console.info(`[orbital] Fallback mode: loaded ${this.records.size} built-in satellite(s).`);
     return {
       totalCount: this.records.size,
-      groups:     this.groupsMeta,
-      stale:      true,
-      errors:     null,
+      groups: this.groupsMeta,
+      stale: true,
+      errors: null,
     };
   }
 
@@ -148,19 +148,19 @@ export class SatelliteManager {
         if (!satrec) continue;
 
         const record = {
-          id:            item.id,
-          name:          item.name,
-          noradId:       item.noradId,
-          group:         groupKey,
+          id: item.id,
+          name: item.name,
+          noradId: item.noradId,
+          group: groupKey,
           satrec,
           periodMinutes: item.periodMinutes,
-          inclination:   item.inclination,
-          eccentricity:  item.eccentricity,
-          lat:           null,
-          lon:           null,
-          altKm:         null,
-          velocityKmS:   null,
-          valid:         false,
+          inclination: item.inclination,
+          eccentricity: item.eccentricity,
+          lat: null,
+          lon: null,
+          altKm: null,
+          velocityKmS: null,
+          valid: false,
         };
         this.records.set(record.id, record);
         groupRecords.push(record);

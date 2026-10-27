@@ -319,6 +319,7 @@ export class OrbitalScene {
 
   _buildSolarSystem() {
     this._solarGroup = new THREE.Group();
+    this._solarGroup.visible = false; // hidden until first updateSolarSystem() positions everything
     this.scene.add(this._solarGroup);
 
     // ---- Sun ----------------------------------------------------------------
@@ -328,7 +329,7 @@ export class OrbitalScene {
     this._sunMesh = new THREE.Mesh(sunCoreGeo, sunCoreMat);
     this._solarGroup.add(this._sunMesh);
 
-    // Corona glow (additive sphere slightly larger than core)
+    // Corona glow — parented to _sunMesh so it always follows the sun position.
     const coronaMat = new THREE.ShaderMaterial({
       uniforms: { color: { value: new THREE.Color(0xff9922) } },
       vertexShader: /* glsl */`
@@ -354,11 +355,11 @@ export class OrbitalScene {
       depthWrite: false,
     });
     const coronaGeo = new THREE.SphereGeometry(3.2 * 2.6, 32, 32);
-    this._solarGroup.add(new THREE.Mesh(coronaGeo, coronaMat));
+    this._sunMesh.add(new THREE.Mesh(coronaGeo, coronaMat));  // child of sun, not solarGroup
 
-    // Point light emitted from the Sun
+    // Point light also parented to sun mesh — moves automatically with it.
     this._sunPointLight = new THREE.PointLight(0xffe8a0, 3.0, 0, 1.5);
-    this._solarGroup.add(this._sunPointLight);
+    this._sunMesh.add(this._sunPointLight);
 
     // ---- Planets ------------------------------------------------------------
     const PLANET_DEFS = [
@@ -436,9 +437,12 @@ export class OrbitalScene {
     const sunDir = computeSunECI(simDate);
     const sunPos = new THREE.Vector3(-sunDir.x * AU, -sunDir.y * AU, -sunDir.z * AU);
     this._sunMesh.position.copy(sunPos);
-    this._sunPointLight.position.copy(sunPos);
+    // NOTE: _sunPointLight is a child of _sunMesh, so no separate position update needed.
 
-    // Update sun light to come from the correct direction
+    // Reveal the group now that everything is positioned (prevents a 1-frame flash at Earth origin).
+    this._solarGroup.visible = true;
+
+    // Update Earth day/night terminator and directional light.
     this.sunLight.position.set(sunDir.x * 50, sunDir.y * 50, sunDir.z * 50);
     this.earthUniforms.sunDirection.value.set(sunDir.x, sunDir.y, sunDir.z);
 
