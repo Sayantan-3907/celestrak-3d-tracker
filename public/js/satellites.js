@@ -26,22 +26,37 @@ export class SatelliteManager {
    * @param {string[]} [groups] group keys; omit to fetch every known group
    */
   async load(groups) {
+    // Fetch groups metadata and satellite TLEs in parallel.
+    // /api/metadata is fetched separately and silently — a 404 or network
+    // error there must never surface as a visible red toast.
     const [groupsRes, satsRes] = await Promise.all([
       fetch('/api/groups'),
       fetch(groups && groups.length ? `/api/satellites?groups=${groups.join(',')}` : '/api/satellites'),
     ]);
 
-    if (!groupsRes.ok) {
-      throw new Error(`Failed to load group metadata (HTTP ${groupsRes.status})`);
+    // Silently probe /api/metadata; ignore any failure (404, network error, etc.).
+    try {
+      const metaRes = await fetch('/api/metadata');
+      if (!metaRes.ok) {
+        console.debug(`[orbital] /api/metadata returned ${metaRes.status} — ignoring.`);
+      }
+    } catch (_) {
+      console.debug('[orbital] /api/metadata unreachable — ignoring.');
     }
+
+    // /api/groups: non-ok is a soft warning, not a hard crash.
+    if (!groupsRes.ok) {
+      console.warn(`[orbital] Failed to load group metadata (HTTP ${groupsRes.status}); UI labels may be missing.`);
+    }
+
     if (!satsRes.ok && satsRes.status !== 502) {
       throw new Error(`Failed to load satellite data (HTTP ${satsRes.status})`);
     }
 
-    const groupsJson = await groupsRes.json();
+    const groupsJson = groupsRes.ok ? await groupsRes.json() : { groups: [] };
     const satsJson = await satsRes.json();
 
-    this.groupsMeta = groupsJson.groups;
+    this.groupsMeta = groupsJson.groups ?? [];
     this.fetchedAt = satsJson.fetchedAt || Date.now();
     this.stale = Boolean(satsJson.stale);
 

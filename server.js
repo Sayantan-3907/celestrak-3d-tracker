@@ -64,6 +64,26 @@ const MAX_SATELLITES_PER_GROUP = {
   starlink: 1200,
 };
 
+// ---------------------------------------------------------------------------
+// Hardcoded TLE fallback — used when CelesTrak is unreachable and the cache
+// is empty (first-run / cold-start scenario).  Only covers the "stations"
+// group.  Update periodically; TLEs decay in accuracy after ~weeks.
+// ---------------------------------------------------------------------------
+const FALLBACK_TLE = {
+  stations: [
+    {
+      name: 'ISS (ZARYA)',
+      line1: '1 25544U 98067A   24287.54791667  .00020351  00000+0  36438-3 0  9993',
+      line2: '2 25544  51.6402 208.9163 0006317 310.8535 203.8833 15.50099522476944',
+    },
+    {
+      name: 'TIANGONG',
+      line1: '1 48274U 21035A   24287.50000000  .00013916  00000+0  16064-3 0  9990',
+      line2: '2 48274  41.4737 203.5350 0005708 239.9485 120.1101 15.61501709181931',
+    },
+  ],
+};
+
 /** In-memory cache: { [groupKey]: { data: Satellite[], fetchedAt: number, stale: boolean } } */
 const cache = Object.create(null);
 
@@ -186,6 +206,22 @@ async function getGroupData(groupKey) {
       );
       return { ...cached, stale: true };
     }
+
+    // No cache yet — try the hardcoded fallback so the app never 502s on
+    // a cold start when CelesTrak is temporarily unreachable.
+    if (FALLBACK_TLE[groupKey]) {
+      console.warn(
+        `[orbital] CelesTrak unreachable for "${groupKey}" (${err.message}); falling back to hardcoded TLE data.`
+      );
+      const fallbackSats = parseTLEText(
+        FALLBACK_TLE[groupKey].map((t) => `${t.name}\n${t.line1}\n${t.line2}`).join('\n'),
+        groupKey
+      );
+      const entry = { data: fallbackSats, fetchedAt: Date.now(), stale: true };
+      cache[groupKey] = entry;
+      return entry;
+    }
+
     throw err;
   }
 }
@@ -278,6 +314,15 @@ app.get('/api/satellites', async (req, res) => {
 });
 
 /**
+ * GET /api/metadata
+ * Returns a minimal status object so frontend code that probes this endpoint
+ * never receives a 404 (which would surface as a red toast in the UI).
+ */
+app.get('/api/metadata', (req, res) => {
+  res.json({ status: 'ok', group: 'stations' });
+});
+
+/**
  * GET /api/health
  * Lightweight health/status endpoint, also useful for confirming the server
  * is up during local development.
@@ -317,7 +362,8 @@ if (require.main === module) {
     console.log('  API endpoints:');
     console.log(`    GET http://localhost:${PORT}/api/satellites`);
     console.log(`    GET http://localhost:${PORT}/api/groups`);
-    console.log(`    GET http://localhost:${PORT}/api/health\n`);
+    console.log(`    GET http://localhost:${PORT}/api/health`);
+    console.log(`    GET http://localhost:${PORT}/api/metadata\n`);
   });
 }
 module.exports = app;
