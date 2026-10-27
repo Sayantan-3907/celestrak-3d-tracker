@@ -26,79 +26,56 @@ export class SatelliteManager {
    * @param {string[]} [groups] group keys; omit to fetch every known group
    */
   async load(groups) {
-    // Fetch groups metadata and satellite TLEs in parallel.
-    // /api/metadata is fetched separately and silently — a 404 or network
-    // error there must never surface as a visible red toast.
-    const [groupsRes, satsRes] = await Promise.all([
-      fetch('/api/groups'),
-      fetch(groups && groups.length ? `/api/satellites?groups=${groups.join(',')}` : '/api/satellites'),
-    ]);
+    // ---------------------------------------------------------------------------
+    // Try the backend API first.  If the server isn't running at all (static
+    // file open, GitHub Pages, cold Vercel cold-start, etc.) every /api/* route
+    // returns 404.  We detect that case and fall back to hardcoded TLEs so the
+    // globe always renders something useful.
+    // ---------------------------------------------------------------------------
 
-    // Silently probe /api/metadata; ignore any failure (404, network error, etc.).
+    // Silently probe /api/metadata — never surface its failure as a toast.
+    fetch('/api/metadata').catch(() => {});
+
+    let groupsRes, satsRes;
     try {
-      const metaRes = await fetch('/api/metadata');
-      if (!metaRes.ok) {
-        console.debug(`[orbital] /api/metadata returned ${metaRes.status} — ignoring.`);
-      }
-    } catch (_) {
-      console.debug('[orbital] /api/metadata unreachable — ignoring.');
+      [groupsRes, satsRes] = await Promise.all([
+        fetch('/api/groups'),
+        fetch(groups && groups.length ? `/api/satellites?groups=${groups.join(',')}` : '/api/satellites'),
+      ]);
+    } catch (networkErr) {
+      // Complete network failure (e.g. no server, offline).
+      console.warn('[orbital] Backend unreachable:', networkErr.message, '— using built-in fallback TLEs.');
+      return this._loadFallback();
     }
 
-    // /api/groups: non-ok is a soft warning, not a hard crash.
+    // If both core endpoints 404, the backend is simply not running.
+    if (groupsRes.status === 404 && satsRes.status === 404) {
+      console.warn('[orbital] Backend not running (404 on /api/groups + /api/satellites) — using built-in fallback TLEs.');
+      return this._loadFallback();
+    }
+
+    // /api/groups non-ok is a soft warning — labels may be missing but not fatal.
     if (!groupsRes.ok) {
       console.warn(`[orbital] Failed to load group metadata (HTTP ${groupsRes.status}); UI labels may be missing.`);
     }
 
+    // /api/satellites non-ok (except 502, which means partial upstream failure) is fatal.
     if (!satsRes.ok && satsRes.status !== 502) {
       throw new Error(`Failed to load satellite data (HTTP ${satsRes.status})`);
     }
 
     const groupsJson = groupsRes.ok ? await groupsRes.json() : { groups: [] };
-    const satsJson = await satsRes.json();
+    const satsJson   = await satsRes.json();
 
     this.groupsMeta = groupsJson.groups ?? [];
-    this.fetchedAt = satsJson.fetchedAt || Date.now();
-    this.stale = Boolean(satsJson.stale);
+    this.fetchedAt  = satsJson.fetchedAt || Date.now();
+    this.stale      = Boolean(satsJson.stale);
 
     if (satsJson.errors && Object.keys(satsJson.errors).length > 0) {
       console.warn('[orbital] Some satellite groups failed to load:', satsJson.errors);
     }
 
-    this.records.clear();
-    this.byGroup.clear();
-
-    for (const [groupKey, list] of Object.entries(satsJson.groups || {})) {
-      const groupRecords = [];
-      for (const item of list) {
-        let satrec;
-        try {
-          satrec = satellite.twoline2satrec(item.line1, item.line2);
-        } catch (err) {
-          continue; // Skip malformed TLEs rather than crash the whole load.
-        }
-        if (!satrec) continue;
-
-        const record = {
-          id: item.id,
-          name: item.name,
-          noradId: item.noradId,
-          group: groupKey,
-          satrec,
-          periodMinutes: item.periodMinutes,
-          inclination: item.inclination,
-          eccentricity: item.eccentricity,
-          // Populated every propagation tick:
-          lat: null,
-          lon: null,
-          altKm: null,
-          velocityKmS: null,
-          valid: false,
-        };
-        this.records.set(record.id, record);
-        groupRecords.push(record);
-      }
-      this.byGroup.set(groupKey, groupRecords);
-    }
+    this._ingestSatelliteGroups(satsJson.groups || {});
 
     if (satsJson.count === 0 && Object.keys(satsJson.errors || {}).length > 0) {
       throw new Error('CelesTrak is unreachable and no cached data is available yet.');
@@ -106,10 +83,90 @@ export class SatelliteManager {
 
     return {
       totalCount: this.records.size,
-      groups: this.groupsMeta,
-      stale: this.stale,
-      errors: satsJson.errors || null,
+      groups:     this.groupsMeta,
+      stale:      this.stale,
+      errors:     satsJson.errors || null,
     };
+  }
+
+  /**
+   * Hardcoded TLE fallback — used when the Express backend is not running
+   * (static file open, GitHub Pages deployment, etc.).  TLEs are approximate
+   * and will drift; they exist purely so the globe is never blank.
+   * @private
+   */
+  _loadFallback() {
+    const FALLBACK = [
+      {
+        id: 'stations-25544', name: 'ISS (ZARYA)', noradId: '25544', group: 'stations',
+        line1: '1 25544U 98067A   24287.54791667  .00020351  00000+0  36438-3 0  9993',
+        line2: '2 25544  51.6402 208.9163 0006317 310.8535 203.8833 15.50099522476944',
+        periodMinutes: 92.9, inclination: 51.64, eccentricity: 0.0006317,
+      },
+      {
+        id: 'stations-48274', name: 'TIANGONG', noradId: '48274', group: 'stations',
+        line1: '1 48274U 21035A   24287.50000000  .00013916  00000+0  16064-3 0  9990',
+        line2: '2 48274  41.4737 203.5350 0005708 239.9485 120.1101 15.61501709181931',
+        periodMinutes: 92.2, inclination: 41.47, eccentricity: 0.0005708,
+      },
+    ];
+
+    this.groupsMeta = [{ key: 'stations', label: 'Space Stations', color: '#4FD1C5' }];
+    this.fetchedAt  = Date.now();
+    this.stale      = true;
+
+    this._ingestSatelliteGroups({ stations: FALLBACK });
+
+    console.info(`[orbital] Fallback mode: loaded ${this.records.size} built-in satellite(s).`);
+    return {
+      totalCount: this.records.size,
+      groups:     this.groupsMeta,
+      stale:      true,
+      errors:     null,
+    };
+  }
+
+  /**
+   * Parses a {groupKey -> item[]} map into this.records / this.byGroup.
+   * Each item must have {id, name, noradId, group, line1, line2, periodMinutes,
+   * inclination, eccentricity}.
+   * @private
+   */
+  _ingestSatelliteGroups(groupsMap) {
+    this.records.clear();
+    this.byGroup.clear();
+
+    for (const [groupKey, list] of Object.entries(groupsMap)) {
+      const groupRecords = [];
+      for (const item of list) {
+        let satrec;
+        try {
+          satrec = satellite.twoline2satrec(item.line1, item.line2);
+        } catch (_) {
+          continue; // Skip malformed TLEs rather than crash the whole load.
+        }
+        if (!satrec) continue;
+
+        const record = {
+          id:            item.id,
+          name:          item.name,
+          noradId:       item.noradId,
+          group:         groupKey,
+          satrec,
+          periodMinutes: item.periodMinutes,
+          inclination:   item.inclination,
+          eccentricity:  item.eccentricity,
+          lat:           null,
+          lon:           null,
+          altKm:         null,
+          velocityKmS:   null,
+          valid:         false,
+        };
+        this.records.set(record.id, record);
+        groupRecords.push(record);
+      }
+      this.byGroup.set(groupKey, groupRecords);
+    }
   }
 
   /**
