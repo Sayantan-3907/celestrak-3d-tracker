@@ -179,7 +179,7 @@ function animate(now) {
       orbitalScene.updateGroupPositions(groupKey, buf.buffer, buf.count);
     }
 
-    orbitalScene.updateSunPosition(timeController.simDate);
+    orbitalScene.updateSolarSystem(timeController.simDate);
 
     if (selectedId) {
       const record = satelliteManager.getRecord(selectedId);

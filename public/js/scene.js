@@ -5,6 +5,8 @@ import {
   KM_TO_SCENE,
   computeSubsolarPoint,
   geodeticToScenePosition,
+  computeSunECI,
+  computePlanetHeliocentricXYZ,
 } from './utils.js';
 
 const TEXTURE_BASE = 'https://threejs.org/examples/textures/planets/';
@@ -120,7 +122,7 @@ export class OrbitalScene {
       50,
       container.clientWidth / container.clientHeight,
       0.1,
-      2000
+      6000   // extended to see Neptune at ~2400 scene units
     );
     this.camera.position.set(0, 6, 16);
 
@@ -134,7 +136,7 @@ export class OrbitalScene {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.minDistance = SCENE_EARTH_RADIUS + 0.3;
-    this.controls.maxDistance = 60;
+    this.controls.maxDistance = 3000;  // allows pulling back to see the solar system
     this.controls.rotateSpeed = 0.45;
     this.controls.zoomSpeed = 0.7;
 
@@ -144,6 +146,7 @@ export class OrbitalScene {
     this._buildLighting();
     this._buildStarfield();
     this._buildEarth();
+    this._buildSolarSystem();
     this._buildSelectionMarker();
 
     this._satelliteLayers = new Map(); // groupKey -> {points, geometry, material, capacity}
@@ -302,6 +305,181 @@ export class OrbitalScene {
     this.earthUniforms.sunDirection.value.copy(dir);
     this.sunLight.position.copy(dir).multiplyScalar(50);
   }
+
+  // ---------------------------------------------------------------------------
+  // Solar system
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Visual + physical scale constants.
+   * 1 AU = SCENE_AU scene units (80 keeps planets well outside Earth's orbit
+   * at ~5 scene units).  Sun size is boosted for visibility.
+   */
+  static get SCENE_AU() { return 80; }
+
+  _buildSolarSystem() {
+    this._solarGroup = new THREE.Group();
+    this.scene.add(this._solarGroup);
+
+    // ---- Sun ----------------------------------------------------------------
+    // Custom glowing-corona shader — renders an additive halo around the core.
+    const sunCoreMat = new THREE.MeshBasicMaterial({ color: 0xffe87a });
+    const sunCoreGeo = new THREE.SphereGeometry(3.2, 32, 32);
+    this._sunMesh = new THREE.Mesh(sunCoreGeo, sunCoreMat);
+    this._solarGroup.add(this._sunMesh);
+
+    // Corona glow (additive sphere slightly larger than core)
+    const coronaMat = new THREE.ShaderMaterial({
+      uniforms: { color: { value: new THREE.Color(0xff9922) } },
+      vertexShader: /* glsl */`
+        varying vec3 vNormal;
+        varying vec3 vView;
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          vView   = normalize(-vec3(modelViewMatrix * vec4(position,1.0)));
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+        }`,
+      fragmentShader: /* glsl */`
+        uniform vec3 color;
+        varying vec3 vNormal;
+        varying vec3 vView;
+        void main() {
+          float rim = 1.0 - max(dot(vNormal, vView), 0.0);
+          float glow = pow(rim, 2.2);
+          gl_FragColor = vec4(color * glow, glow * 0.75);
+        }`,
+      transparent: true,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const coronaGeo = new THREE.SphereGeometry(3.2 * 2.6, 32, 32);
+    this._solarGroup.add(new THREE.Mesh(coronaGeo, coronaMat));
+
+    // Point light emitted from the Sun
+    this._sunPointLight = new THREE.PointLight(0xffe8a0, 3.0, 0, 1.5);
+    this._solarGroup.add(this._sunPointLight);
+
+    // ---- Planets ------------------------------------------------------------
+    const PLANET_DEFS = [
+      { name: 'mercury', color: 0xa89070, radius: 0.35, ringConfig: null },
+      { name: 'venus',   color: 0xe8c87a, radius: 0.55, ringConfig: null },
+      // Earth is always at origin; skip heliocentric placement.
+      { name: 'mars',    color: 0xd0563a, radius: 0.42, ringConfig: null },
+      { name: 'jupiter', color: 0xc8a870, radius: 1.50, ringConfig: null },
+      { name: 'saturn',  color: 0xe0d090, radius: 1.20,
+        ringConfig: { inner: 1.55, outer: 2.65, color: 0xd8c890 } },
+      { name: 'uranus',  color: 0x7adce8, radius: 0.85, ringConfig: null },
+      { name: 'neptune', color: 0x4a6be8, radius: 0.80, ringConfig: null },
+    ];
+
+    this._planetMeshes  = {};
+    this._orbitLines    = {};
+
+    // Subtle ecliptic-plane grid for orientation
+    const gridMat = new THREE.LineBasicMaterial({ color: 0x1a2840, transparent: true, opacity: 0.35, depthWrite: false });
+
+    for (const def of PLANET_DEFS) {
+      // Planet sphere
+      const geo = new THREE.SphereGeometry(def.radius, 24, 24);
+      const mat = new THREE.MeshStandardMaterial({
+        color: def.color,
+        roughness: 0.7,
+        metalness: 0.05,
+        emissive: new THREE.Color(def.color).multiplyScalar(0.15),
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = false;
+      this._solarGroup.add(mesh);
+      this._planetMeshes[def.name] = mesh;
+
+      // Saturn rings
+      if (def.ringConfig) {
+        const ringGeo = new THREE.RingGeometry(def.ringConfig.inner, def.ringConfig.outer, 80);
+        // RingGeometry UVs map radially; tilt to match Saturn's axial tilt (~27°)
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: def.ringConfig.color,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.55,
+          depthWrite: false,
+        });
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.rotation.x = Math.PI / 2 - 0.47; // ~27° tilt
+        mesh.add(ringMesh);
+      }
+
+      // Orbit path circle (approximate as ellipse with 256 segments)
+      const orbitPts = [];
+      for (let i = 0; i <= 256; i++) {
+        const theta = (i / 256) * Math.PI * 2;
+        // We'll update the actual path in updateSolarSystem; placeholder
+        orbitPts.push(new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta)));
+      }
+      const orbitGeo = new THREE.BufferGeometry().setFromPoints(orbitPts);
+      const orbitLine = new THREE.LineLoop(orbitGeo, gridMat.clone());
+      this._solarGroup.add(orbitLine);
+      this._orbitLines[def.name] = orbitLine;
+    }
+  }
+
+  /**
+   * Moves the Sun and all planets to their astronomically correct positions
+   * for the given simulation Date. Call once per propagation tick.
+   * @param {Date} simDate
+   */
+  updateSolarSystem(simDate) {
+    const AU = OrbitalScene.SCENE_AU;
+
+    // Sun position: geocentric, pointing away from where sunlight comes from.
+    // Earth is at the scene origin; Sun is at -sunDirection * 1 AU.
+    const sunDir = computeSunECI(simDate);
+    const sunPos = new THREE.Vector3(-sunDir.x * AU, -sunDir.y * AU, -sunDir.z * AU);
+    this._sunMesh.position.copy(sunPos);
+    this._sunPointLight.position.copy(sunPos);
+
+    // Update sun light to come from the correct direction
+    this.sunLight.position.set(sunDir.x * 50, sunDir.y * 50, sunDir.z * 50);
+    this.earthUniforms.sunDirection.value.set(sunDir.x, sunDir.y, sunDir.z);
+
+    // Planets: compute heliocentric XYZ then offset to geocentric
+    const earthHel = computePlanetHeliocentricXYZ('earth', simDate, AU);
+    const PLANETS = ['mercury','venus','mars','jupiter','saturn','uranus','neptune'];
+
+    for (const name of PLANETS) {
+      const mesh  = this._planetMeshes[name];
+      const orbit = this._orbitLines[name];
+      if (!mesh) continue;
+
+      const hel = computePlanetHeliocentricXYZ(name, simDate, AU);
+      // Geocentric position = heliocentric_planet − heliocentric_earth
+      const geoX = hel.x - earthHel.x;
+      const geoY = hel.y - earthHel.y;
+      const geoZ = hel.z - earthHel.z;
+      mesh.position.set(geoX, geoY, geoZ);
+
+      // Slowly spin each planet for visual interest
+      mesh.rotation.y += 0.002;
+
+      // Orbit ring: a circle around the geocentric Sun at the planet's
+      // heliocentric distance (magnitude of heliocentric vector), drawn
+      // in the ecliptic plane (XZ in scene frame, Y ≈ 0 at ecliptic).
+      if (orbit) {
+        const helDist = Math.sqrt(hel.x ** 2 + hel.y ** 2 + hel.z ** 2);
+        const pos = orbit.geometry.attributes.position;
+        for (let i = 0; i <= 256; i++) {
+          const theta = (i / 256) * Math.PI * 2;
+          pos.setXYZ(i,
+            sunPos.x + Math.cos(theta) * helDist,
+            sunPos.y,                              // keep in ecliptic plane
+            sunPos.z + Math.sin(theta) * helDist,
+          );
+        }
+        pos.needsUpdate = true;
+      }
+    }
+  }
+
 
   /**
    * Registers (or returns the existing) GPU point layer for a satellite
