@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<title>ORBITAL — Real-Time Satellite Tracker</title>
+<meta name="description" content="Live 3D satellite tracking with real SGP4 orbit propagation." />
+
+<!-- Fonts: Space Grotesk for UI/display, JetBrains Mono for telemetry readouts -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+  rel="stylesheet"
+/>
+
+<!-- Tailwind (CDN build — no local build step needed for this demo) -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['"Space Grotesk"', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+        colors: {
+          space: {
+            950: '#070B14',
+            900: '#0B1120',
+            850: '#0F1729',
+            800: '#121A2C',
+            700: '#1A2438',
+            600: '#23304A',
+            500: '#37476A',
+          },
+          ink: {
+            100: '#E7ECF5',
+            300: '#B7C2D6',
+            500: '#8C9AB5',
+          },
+          amber: {
+            400: '#E8A33D',
+            300: '#F0B65C',
+          },
+        },
+        boxShadow: {
+          panel: '0 8px 40px -12px rgba(0,0,0,0.6)',
+        },
+      },
+    },
+  };
+</script>
+
+<!-- satellite.js: SGP4/SDP4 propagation, UMD build exposes global `satellite` -->
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
+
+<!-- Three.js via ES module import map -->
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="bg-space-950 text-ink-100 font-sans antialiased overflow-hidden h-screen w-screen">
+
+  <!-- 3D canvas mount point, sits behind all UI chrome -->
+  <div id="scene-container" class="fixed inset-0 z-0"></div>
+
+  <!-- App shell -->
+  <div id="app" class="relative z-10 h-screen w-screen flex flex-col pointer-events-none">
+
+    <!-- Top bar -->
+    <header class="pointer-events-auto flex items-center gap-4 px-4 sm:px-6 py-3 bg-space-900/80 backdrop-blur-md border-b border-space-600/60">
+      <div class="flex items-center gap-2.5 shrink-0">
+        <span class="relative flex h-2.5 w-2.5">
+          <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+          <span id="status-dot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400"></span>
+        </span>
+        <h1 class="text-lg sm:text-xl font-semibold tracking-tight">ORBITAL</h1>
+      </div>
+
+      <div class="hidden md:flex items-center gap-2 text-ink-500 text-sm border-l border-space-600 pl-4">
+        <span id="sat-count" class="font-mono text-ink-300">— sats</span>
+        <span>tracked</span>
+      </div>
+
+      <div class="flex-1 min-w-[120px] max-w-md">
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-ink-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35m0 0a7.5 7.5 0 10-10.6 0 7.5 7.5 0 0010.6 0z" />
+          </svg>
+          <input
+            id="search-input"
+            type="text"
+            placeholder="Search satellites or NORAD ID…"
+            class="w-full bg-space-800 border border-space-600 rounded-lg pl-9 pr-3 py-2 text-sm placeholder:text-ink-500 focus:outline-none focus:ring-2 focus:ring-amber-400/60 focus:border-amber-400/60 transition"
+          />
+        </div>
+      </div>
+
+      <div class="hidden lg:flex items-center gap-1 font-mono text-xs text-ink-300 border-l border-space-600 pl-4">
+        <span id="clock-utc">--:--:--</span>
+        <span class="text-ink-500">UTC</span>
+      </div>
+
+      <button id="sidebar-toggle" class="lg:hidden shrink-0 p-2 rounded-lg bg-space-800 border border-space-600" aria-label="Toggle satellite list">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+    </header>
+
+    <!-- Body: sidebar + 3D viewport + telemetry -->
+    <div class="flex-1 flex min-h-0">
+
+      <!-- Sidebar -->
+      <aside id="sidebar" class="pointer-events-auto w-[320px] max-w-[85vw] shrink-0 bg-space-900/85 backdrop-blur-md border-r border-space-600/60 flex flex-col transition-transform duration-200 -translate-x-full lg:translate-x-0 absolute lg:static inset-y-0 left-0 z-20">
+        <div class="flex gap-1.5 p-3 border-b border-space-600/60 overflow-x-auto" id="group-filters">
+          <!-- Group filter chips injected by ui.js -->
+        </div>
+        <div class="flex-1 overflow-y-auto" id="satellite-list">
+          <div class="p-6 text-center text-ink-500 text-sm" id="list-loading">
+            Fetching TLE data from CelesTrak…
+          </div>
+        </div>
+      </aside>
+
+      <!-- Backdrop for mobile sidebar -->
+      <div id="sidebar-backdrop" class="lg:hidden hidden fixed inset-0 bg-black/50 z-10 pointer-events-auto"></div>
+
+      <!-- 3D viewport spacer (canvas itself is fixed behind everything) -->
+      <main class="flex-1 relative min-w-0">
+
+        <!-- Camera / view controls -->
+        <div class="pointer-events-auto absolute top-4 right-4 z-10 flex flex-col gap-2">
+          <button id="reset-camera" title="Reset camera" class="p-2.5 rounded-lg bg-space-900/80 border border-space-600 backdrop-blur-md hover:border-amber-400/60 transition text-ink-300 hover:text-amber-300">
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l2.5 2.5" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Empty-state hint -->
+        <div id="viewport-hint" class="pointer-events-none absolute bottom-24 lg:bottom-6 left-1/2 -translate-x-1/2 text-xs text-ink-500 bg-space-900/70 backdrop-blur px-3 py-1.5 rounded-full border border-space-600/60 transition-opacity">
+          Select a satellite from the list to lock on and view telemetry
+        </div>
+      </main>
+
+      <!-- Telemetry panel -->
+      <aside id="telemetry-panel" class="pointer-events-auto w-[300px] max-w-[85vw] bg-space-900/90 backdrop-blur-md border border-space-600/60 rounded-2xl shadow-panel absolute top-4 bottom-4 right-4 z-20 translate-x-[calc(100%+1rem)] transition-transform duration-300 overflow-y-auto">
+        <!-- Content injected by ui.js -->
+      </aside>
+    </div>
+
+    <!-- Time control bar -->
+    <footer class="pointer-events-auto flex flex-wrap items-center gap-3 sm:gap-4 px-4 sm:px-6 py-3 bg-space-900/80 backdrop-blur-md border-t border-space-600/60">
+      <div class="flex items-center gap-2">
+        <button id="btn-play-pause" class="flex items-center justify-center h-9 w-9 rounded-lg bg-amber-400 text-space-950 hover:bg-amber-300 transition" aria-label="Play or pause simulation">
+          <svg id="icon-pause" class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+          <svg id="icon-play" class="h-4 w-4 hidden" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button id="btn-reset-time" title="Jump to current real time" class="flex items-center justify-center h-9 w-9 rounded-lg bg-space-800 border border-space-600 hover:border-amber-400/60 transition text-ink-300 hover:text-amber-300">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.5 3.5M15 15v4.5m0-4.5h4.5m-4.5 0l5.5 5.5" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="flex items-center gap-1" id="speed-buttons" role="group" aria-label="Time warp speed">
+        <!-- speed buttons injected by timeControl.js -->
+      </div>
+
+      <div class="flex-1 min-w-[140px] font-mono text-xs sm:text-sm text-ink-300 text-right sm:text-left">
+        <span id="sim-time">—</span>
+      </div>
+
+      <div class="hidden sm:flex items-center gap-1.5 text-xs text-ink-500">
+        <span class="h-2 w-2 rounded-full bg-[#4FD1C5]"></span> Stations
+        <span class="h-2 w-2 rounded-full bg-[#9F7AEA] ml-2"></span> Starlink
+        <span class="h-2 w-2 rounded-full bg-[#E8A33D] ml-2"></span> Brightest
+        <span class="h-2 w-2 rounded-full bg-[#63B3ED] ml-2"></span> GPS
+        <span class="h-2 w-2 rounded-full bg-[#68D391] ml-2"></span> Weather
+      </div>
+    </footer>
+  </div>
+
+  <!-- Toast / error banner -->
+  <div id="toast" class="pointer-events-none fixed top-20 left-1/2 -translate-x-1/2 z-50 opacity-0 transition-opacity duration-300"></div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

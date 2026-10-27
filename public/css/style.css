@@ -1,0 +1,147 @@
+/* Supplementary styles that go beyond plain Tailwind utility classes. */
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+#scene-container canvas {
+  display: block;
+  outline: none;
+}
+
+/* Thin, unobtrusive scrollbars matching the space theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #37476A #0B1120;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #23304A;
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #37476A;
+}
+
+/* Satellite list rows */
+.sat-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.55rem 0.9rem;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.sat-row:hover {
+  background-color: rgba(35, 48, 74, 0.45);
+}
+.sat-row.active {
+  background-color: rgba(232, 163, 61, 0.1);
+  border-left-color: #E8A33D;
+}
+.sat-row .dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+.sat-row .meta {
+  min-width: 0;
+  flex: 1;
+}
+.sat-row .name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #E7ECF5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sat-row .norad {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6875rem;
+  color: #8C9AB5;
+}
+
+/* Group filter chips */
+.chip {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #23304A;
+  color: #B7C2D6;
+  background: #121A2C;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 120ms ease;
+}
+.chip:hover {
+  border-color: #37476A;
+}
+.chip.active {
+  background: #E8A33D;
+  border-color: #E8A33D;
+  color: #070B14;
+}
+
+/* Telemetry panel */
+.telem-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(35, 48, 74, 0.6);
+}
+.telem-row:last-child {
+  border-bottom: none;
+}
+.telem-label {
+  font-size: 0.75rem;
+  color: #8C9AB5;
+}
+.telem-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9375rem;
+  color: #E7ECF5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Speed toggle buttons in the footer */
+.speed-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.5rem;
+  color: #8C9AB5;
+  border: 1px solid transparent;
+  transition: all 120ms ease;
+}
+.speed-btn:hover {
+  color: #E7ECF5;
+}
+.speed-btn.active {
+  background: #121A2C;
+  border-color: #E8A33D;
+  color: #F0B65C;
+}
+
+/* Slide-in state for mobile drawers */
+.drawer-open {
+  transform: translateX(0) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #status-ping {
+    animation: none;
+  }
+}
